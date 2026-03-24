@@ -5,356 +5,314 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, perMessageDeflate: false });
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Game constants
-const TICK_RATE = 60;
-const NET_RATE = 20; // network send rate (separate from physics)
-const GRAVITY = 0.45;
+// Constants
+const TICK_RATE = 30;  // physics + network combined at 30fps (was 60+20 separate)
+const GRAVITY = 0.9;   // adjusted for 30fps (was 0.45 at 60fps)
 const MOVE_SPEED = 5.5;
-const JUMP_FORCE = -11.5;
+const JUMP_FORCE = -14; // adjusted for 30fps
 const HOOK_LENGTH = 450;
-const MAP_WIDTH = 1600;
-const MAP_HEIGHT = 900;
+const MAP_W = 1600, MAP_H = 900;
 
 const WEAPONS = {
-  pistol:  { damage: 20, speed: 18, fireRate: 400, size: 4, life: 50, spread: 0.03 },
-  shotgun: { damage: 12, speed: 16, fireRate: 800, size: 3, life: 25, spread: 0.15, pellets: 5 },
-  rocket:  { damage: 45, speed: 10, fireRate: 1000, size: 6, life: 80, spread: 0, explosive: true, radius: 60 },
-  laser:   { damage: 15, speed: 40, fireRate: 200, size: 2, life: 20, spread: 0.01 },
+  pistol:  { dmg: 20, spd: 18, rate: 400, sz: 4, life: 25, spread: 0.03 },
+  shotgun: { dmg: 12, spd: 16, rate: 800, sz: 3, life: 12, spread: 0.15, pellets: 5 },
+  rocket:  { dmg: 45, spd: 10, rate: 1000, sz: 6, life: 40, spread: 0, explode: true, radius: 60 },
+  laser:   { dmg: 15, spd: 40, rate: 200, sz: 2, life: 10, spread: 0.01 },
 };
 
 const players = new Map();
 const bullets = [];
 const pickups = [];
-const effects = [];
 const killFeed = [];
-let nextBulletId = 0;
+let bulletId = 0;
 
-// Map platforms - staircase layout, max 120px vertical gap
 const platforms = [
-  { x: 0, y: MAP_HEIGHT - 20, w: MAP_WIDTH, h: 20 },
-  { x: 0, y: 0, w: MAP_WIDTH, h: 20 },
-  { x: 0, y: 0, w: 20, h: MAP_HEIGHT },
-  { x: MAP_WIDTH - 20, y: 0, w: 20, h: MAP_HEIGHT },
-  { x: 80, y: 770, w: 200, h: 20 },
-  { x: 450, y: 790, w: 180, h: 20 },
-  { x: 750, y: 770, w: 200, h: 20 },
-  { x: 1050, y: 790, w: 180, h: 20 },
-  { x: 1350, y: 770, w: 180, h: 20 },
-  { x: 200, y: 660, w: 220, h: 20 },
-  { x: 580, y: 670, w: 160, h: 20 },
-  { x: 900, y: 660, w: 200, h: 20 },
-  { x: 1200, y: 670, w: 200, h: 20 },
-  { x: 50, y: 560, w: 180, h: 20 },
-  { x: 400, y: 550, w: 250, h: 20 },
-  { x: 750, y: 560, w: 180, h: 20 },
-  { x: 1080, y: 550, w: 220, h: 20 },
-  { x: 1380, y: 560, w: 160, h: 20 },
-  { x: 180, y: 450, w: 200, h: 20 },
-  { x: 550, y: 440, w: 200, h: 20 },
-  { x: 900, y: 450, w: 250, h: 20 },
-  { x: 1250, y: 440, w: 180, h: 20 },
-  { x: 50, y: 340, w: 160, h: 20 },
-  { x: 350, y: 330, w: 220, h: 20 },
-  { x: 700, y: 340, w: 300, h: 20 },
-  { x: 1100, y: 330, w: 200, h: 20 },
-  { x: 1400, y: 340, w: 140, h: 20 },
-  { x: 150, y: 230, w: 200, h: 20 },
-  { x: 500, y: 220, w: 250, h: 20 },
-  { x: 850, y: 230, w: 200, h: 20 },
-  { x: 1200, y: 220, w: 220, h: 20 },
-  { x: 350, y: 120, w: 200, h: 20 },
-  { x: 700, y: 110, w: 250, h: 20 },
-  { x: 1050, y: 120, w: 200, h: 20 },
+  [0,MAP_H-20,MAP_W,20],[0,0,MAP_W,20],[0,0,20,MAP_H],[MAP_W-20,0,20,MAP_H],
+  [80,770,200,20],[450,790,180,20],[750,770,200,20],[1050,790,180,20],[1350,770,180,20],
+  [200,660,220,20],[580,670,160,20],[900,660,200,20],[1200,670,200,20],
+  [50,560,180,20],[400,550,250,20],[750,560,180,20],[1080,550,220,20],[1380,560,160,20],
+  [180,450,200,20],[550,440,200,20],[900,450,250,20],[1250,440,180,20],
+  [50,340,160,20],[350,330,220,20],[700,340,300,20],[1100,330,200,20],[1400,340,140,20],
+  [150,230,200,20],[500,220,250,20],[850,230,200,20],[1200,220,220,20],
+  [350,120,200,20],[700,110,250,20],[1050,120,200,20],
 ];
 
-const PICKUP_SPAWNS = [
-  { x: 300, y: 630, type: 'shotgun' },
-  { x: 980, y: 630, type: 'laser' },
-  { x: 500, y: 520, type: 'health' },
-  { x: 1180, y: 520, type: 'rocket' },
-  { x: 280, y: 420, type: 'laser' },
-  { x: 650, y: 410, type: 'health' },
-  { x: 1000, y: 420, type: 'shotgun' },
-  { x: 450, y: 300, type: 'rocket' },
-  { x: 830, y: 310, type: 'health' },
-  { x: 1190, y: 300, type: 'shotgun' },
-  { x: 600, y: 190, type: 'rocket' },
-  { x: 810, y: 80, type: 'health' },
+const PICKUP_DEFS = [
+  [300,630,'shotgun'],[980,630,'laser'],[500,520,'health'],[1180,520,'rocket'],
+  [280,420,'laser'],[650,410,'health'],[1000,420,'shotgun'],
+  [450,300,'rocket'],[830,310,'health'],[1190,300,'shotgun'],[600,190,'rocket'],[810,80,'health'],
 ];
+for (const [x,y,t] of PICKUP_DEFS) pickups.push({ x, y, type: t, alive: true, timer: 0 });
 
-function initPickups() {
-  pickups.length = 0;
-  for (const spawn of PICKUP_SPAWNS) pickups.push({ ...spawn, alive: true, respawnTimer: 0 });
-}
-initPickups();
+const COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c','#e67e22','#e91e63'];
 
-const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#e91e63'];
-
-function createPlayer(id) {
+function mkPlayer(id) {
   return {
-    id, x: 200 + Math.random() * (MAP_WIDTH - 400), y: 400,
-    vx: 0, vy: 0, width: 28, height: 28, onGround: false,
-    input: { left: false, right: false, jump: false, mouseX: 0, mouseY: 0, shoot: false, hook: false, switchWeapon: null },
-    health: 100, score: 0, deaths: 0, name: 'Player',
-    color: COLORS[id % COLORS.length],
-    hook: null, lastShot: 0, respawnTimer: 0, alive: true,
-    weapon: 'pistol', ammo: { pistol: Infinity, shotgun: 0, rocket: 0, laser: 0 },
-    doubleJump: false, canDoubleJump: true,
+    id, x: 200+Math.random()*(MAP_W-400), y: 400, vx: 0, vy: 0, ground: false,
+    input: { l:0, r:0, j:0, mx:0, my:0, sh:0, hk:0, sw:null },
+    hp: 100, score: 0, deaths: 0, name: 'Player', color: COLORS[id%8],
+    hook: null, lastShot: 0, respawn: 0, alive: true,
+    weapon: 'pistol', ammo: [Infinity, 0, 0, 0], // pistol, shotgun, rocket, laser
   };
 }
 
-function rectCollision(ax, ay, aw, ah, bx, by, bw, bh) {
-  return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+const WPN_IDX = { pistol:0, shotgun:1, rocket:2, laser:3 };
+const WPN_NAME = ['pistol','shotgun','rocket','laser'];
+
+function colRect(ax,ay,aw,ah,bx,by,bw,bh) { return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by; }
+
+function lineHit(x1,y1,x2,y2,x3,y3,x4,y4) {
+  const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+  if(!d) return null;
+  const t=((x1-x3)*(y3-y4)-(y1-y3)*(x3-x4))/d;
+  const u=-((x1-x2)*(y1-y3)-(y1-y2)*(x1-x3))/d;
+  return (t>=0&&t<=1&&u>=0&&u<=1)?{x:x1+t*(x2-x1),y:y1+t*(y2-y1)}:null;
 }
 
-function lineIntersectsLine(x1, y1, x2, y2, x3, y3, x4, y4) {
-  const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
-  if (den === 0) return null;
-  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
-  const u = -((x1 - x2) * (y1 - y3) - (y1 - y2) * (x1 - x3)) / den;
-  if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return { x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1) };
-  return null;
-}
-
-function findHookTarget(px, py, tx, ty) {
-  const dx = tx - px, dy = ty - py;
-  const dist = Math.sqrt(dx * dx + dy * dy);
-  if (dist === 0) return null;
-  const endX = px + (dx / dist) * HOOK_LENGTH, endY = py + (dy / dist) * HOOK_LENGTH;
-  let closest = null, closestDist = Infinity;
-  for (const p of platforms) {
-    for (const pt of [
-      lineIntersectsLine(px, py, endX, endY, p.x, p.y, p.x + p.w, p.y),
-      lineIntersectsLine(px, py, endX, endY, p.x, p.y + p.h, p.x + p.w, p.y + p.h),
-      lineIntersectsLine(px, py, endX, endY, p.x, p.y, p.x, p.y + p.h),
-      lineIntersectsLine(px, py, endX, endY, p.x + p.w, p.y, p.x + p.w, p.y + p.h),
-    ]) {
-      if (pt) { const d = (pt.x - px) ** 2 + (pt.y - py) ** 2; if (d < closestDist) { closestDist = d; closest = pt; } }
+function findHook(px,py,tx,ty) {
+  const dx=tx-px,dy=ty-py,d=Math.sqrt(dx*dx+dy*dy);
+  if(!d) return null;
+  const ex=px+(dx/d)*HOOK_LENGTH, ey=py+(dy/d)*HOOK_LENGTH;
+  let best=null, bd=Infinity;
+  for (const [rx,ry,rw,rh] of platforms) {
+    for (const pt of [lineHit(px,py,ex,ey,rx,ry,rx+rw,ry),lineHit(px,py,ex,ey,rx,ry+rh,rx+rw,ry+rh),
+      lineHit(px,py,ex,ey,rx,ry,rx,ry+rh),lineHit(px,py,ex,ey,rx+rw,ry,rx+rw,ry+rh)]) {
+      if(pt){const dd=(pt.x-px)**2+(pt.y-py)**2;if(dd<bd){bd=dd;best=pt;}}
     }
   }
-  return closest;
+  return best;
 }
 
-function addEffect(type, x, y, color) { effects.push({ type, x: x|0, y: y|0, color, life: type === 'explosion' ? 20 : 10 }); }
-function addKill(killer, victim, weapon) { killFeed.push({ killer, victim, weapon, time: 300 }); }
+// Reusable buffer for binary messages
+const buf = Buffer.alloc(8192);
+
+function writeBinaryState() {
+  let off = 0;
+  const pArr = Array.from(players.values());
+
+  // Header: type(1) + playerCount(1) + bulletCount(2)
+  buf[off++] = 1; // type = state
+  buf[off++] = pArr.length;
+  buf.writeUInt16LE(bullets.length, off); off += 2;
+
+  // Players: id(1) + x(2) + y(2) + vx(2) + vy(2) + hp(1) + score(1) + deaths(1) + weapon(1) + alive(1) + angle(2) + ammo(4x1) + hookX(2) + hookY(2) + nameLen(1) + name
+  for (const p of pArr) {
+    buf[off++] = p.id & 0xFF;
+    buf.writeInt16LE(p.x|0, off); off += 2;
+    buf.writeInt16LE(p.y|0, off); off += 2;
+    buf.writeInt16LE((p.vx*10)|0, off); off += 2;
+    buf.writeInt16LE((p.vy*10)|0, off); off += 2;
+    buf[off++] = p.hp;
+    buf[off++] = p.score;
+    buf[off++] = p.deaths;
+    buf[off++] = WPN_IDX[p.weapon];
+    buf[off++] = (p.alive?1:0) | (p.ground?2:0);
+    const angle = Math.atan2(p.input.my-(p.y+14), p.input.mx-(p.x+14));
+    buf.writeInt16LE((angle*1000)|0, off); off += 2;
+    buf[off++] = Math.min(255, p.ammo[0] === Infinity ? 255 : p.ammo[0]);
+    buf[off++] = Math.min(255, p.ammo[1]);
+    buf[off++] = Math.min(255, p.ammo[2]);
+    buf[off++] = Math.min(255, p.ammo[3]);
+    // Hook
+    if (p.hook) {
+      buf[off++] = 1;
+      buf.writeInt16LE(p.hook.x|0, off); off += 2;
+      buf.writeInt16LE(p.hook.y|0, off); off += 2;
+    } else {
+      buf[off++] = 0;
+    }
+    // Color index
+    buf[off++] = COLORS.indexOf(p.color);
+    // Name
+    const nameBytes = Buffer.from(p.name, 'utf8');
+    buf[off++] = nameBytes.length;
+    nameBytes.copy(buf, off); off += nameBytes.length;
+  }
+
+  // Bullets: x(2) + y(2) + weapon(1) + colorIdx(1)
+  for (const b of bullets) {
+    buf.writeInt16LE(b.x|0, off); off += 2;
+    buf.writeInt16LE(b.y|0, off); off += 2;
+    buf[off++] = WPN_IDX[b.weapon] || 0;
+    buf[off++] = COLORS.indexOf(b.color) & 0xFF;
+  }
+
+  // Pickups alive mask (2 bytes = 16 bits, enough for 12 pickups)
+  let mask = 0;
+  for (let i = 0; i < pickups.length; i++) if (pickups[i].alive) mask |= (1 << i);
+  buf.writeUInt16LE(mask, off); off += 2;
+
+  // Kill feed count + entries
+  const kf = killFeed.slice(0, 3);
+  buf[off++] = kf.length;
+  for (const k of kf) {
+    const kb = Buffer.from(`${k.killer}\0${k.victim}`, 'utf8');
+    buf[off++] = kb.length;
+    kb.copy(buf, off); off += kb.length;
+  }
+
+  return buf.subarray(0, off);
+}
 
 function updatePlayer(p) {
   if (!p.alive) {
-    p.respawnTimer--;
-    if (p.respawnTimer <= 0) {
-      p.alive = true; p.health = 100;
-      p.x = 200 + Math.random() * (MAP_WIDTH - 400); p.y = 400;
+    p.respawn--;
+    if (p.respawn <= 0) {
+      p.alive = true; p.hp = 100;
+      p.x = 200+Math.random()*(MAP_W-400); p.y = 400;
       p.vx = 0; p.vy = 0; p.hook = null;
-      p.weapon = 'pistol';
-      p.ammo = { pistol: Infinity, shotgun: 0, rocket: 0, laser: 0 };
+      p.weapon = 'pistol'; p.ammo = [Infinity, 0, 0, 0];
     }
     return;
   }
 
-  if (p.input.switchWeapon && p.input.switchWeapon !== p.weapon) {
-    const w = p.input.switchWeapon;
-    if (w === 'pistol' || p.ammo[w] > 0) p.weapon = w;
+  const inp = p.input;
+  if (inp.sw !== null) {
+    const wi = WPN_IDX[inp.sw];
+    if (wi !== undefined && (wi === 0 || p.ammo[wi] > 0)) p.weapon = inp.sw;
+    inp.sw = null;
   }
 
-  if (p.input.left) p.vx = -MOVE_SPEED;
-  else if (p.input.right) p.vx = MOVE_SPEED;
-  else p.vx *= 0.8;
+  if (inp.l) p.vx = -MOVE_SPEED;
+  else if (inp.r) p.vx = MOVE_SPEED;
+  else p.vx *= 0.75;
 
-  if (p.input.jump) {
-    if (p.onGround) { p.vy = JUMP_FORCE; p.onGround = false; p.canDoubleJump = true; }
-    else if (p.canDoubleJump && p.doubleJump) { p.vy = JUMP_FORCE * 0.8; p.canDoubleJump = false; }
+  if (inp.j && p.ground) { p.vy = JUMP_FORCE; p.ground = false; }
+
+  if (inp.hk && !p.hook) {
+    const t = findHook(p.x+14, p.y+14, inp.mx, inp.my);
+    if (t) p.hook = { x: t.x, y: t.y };
   }
+  if (!inp.hk) p.hook = null;
 
-  if (p.input.hook && !p.hook) {
-    const target = findHookTarget(p.x + p.width / 2, p.y + p.height / 2, p.input.mouseX, p.input.mouseY);
-    if (target) p.hook = { x: target.x, y: target.y, active: true };
-  }
-  if (!p.input.hook) p.hook = null;
-
-  if (p.hook && p.hook.active) {
-    const dx = p.hook.x - (p.x + p.width / 2), dy = p.hook.y - (p.y + p.height / 2);
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist > 10) { p.vx += (dx / dist) * 0.8; p.vy += (dy / dist) * 0.8; }
-    const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
-    if (speed > 15) { p.vx = (p.vx / speed) * 15; p.vy = (p.vy / speed) * 15; }
+  if (p.hook) {
+    const dx = p.hook.x-(p.x+14), dy = p.hook.y-(p.y+14);
+    const d = Math.sqrt(dx*dx+dy*dy);
+    if (d > 10) { p.vx += (dx/d)*1.2; p.vy += (dy/d)*1.2; }
+    const spd = Math.sqrt(p.vx*p.vx+p.vy*p.vy);
+    if (spd > 18) { p.vx=(p.vx/spd)*18; p.vy=(p.vy/spd)*18; }
   }
 
   p.vy += GRAVITY;
 
   const now = Date.now();
-  const wep = WEAPONS[p.weapon];
-  if (p.input.shoot && now - p.lastShot > wep.fireRate && (p.ammo[p.weapon] > 0 || p.weapon === 'pistol')) {
+  const w = WEAPONS[p.weapon];
+  const wi = WPN_IDX[p.weapon];
+  if (inp.sh && now-p.lastShot > w.rate && (wi===0||p.ammo[wi]>0)) {
     p.lastShot = now;
-    if (p.weapon !== 'pistol') p.ammo[p.weapon]--;
-    const cx = p.x + p.width / 2, cy = p.y + p.height / 2;
-    const dx = p.input.mouseX - cx, dy = p.input.mouseY - cy;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const baseAngle = Math.atan2(dy, dx);
-    for (let i = 0; i < (wep.pellets || 1); i++) {
-      const angle = baseAngle + (Math.random() - 0.5) * wep.spread * 2;
-      bullets.push({
-        id: nextBulletId++, owner: p.id, weapon: p.weapon,
-        x: cx, y: cy, vx: Math.cos(angle) * wep.speed, vy: Math.sin(angle) * wep.speed,
-        life: wep.life, color: p.color, size: wep.size,
-        damage: wep.damage, explosive: wep.explosive, radius: wep.radius,
-      });
+    if (wi>0) p.ammo[wi]--;
+    const cx=p.x+14,cy=p.y+14,dx=inp.mx-cx,dy=inp.my-cy;
+    const dd = Math.sqrt(dx*dx+dy*dy)||1;
+    const ba = Math.atan2(dy,dx);
+    for (let i=0;i<(w.pellets||1);i++) {
+      const a = ba + (Math.random()-0.5)*w.spread*2;
+      bullets.push({ id:bulletId++, owner:p.id, weapon:p.weapon,
+        x:cx,y:cy,vx:Math.cos(a)*w.spd,vy:Math.sin(a)*w.spd,
+        life:w.life,color:p.color,dmg:w.dmg,explode:w.explode,radius:w.radius });
     }
-    addEffect('muzzle', cx + Math.cos(baseAngle) * 20, cy + Math.sin(baseAngle) * 20, p.color);
   }
 
   p.x += p.vx; p.y += p.vy;
 
-  p.onGround = false;
-  for (const plat of platforms) {
-    if (rectCollision(p.x, p.y, p.width, p.height, plat.x, plat.y, plat.w, plat.h)) {
-      const oL = (p.x + p.width) - plat.x, oR = (plat.x + plat.w) - p.x;
-      const oT = (p.y + p.height) - plat.y, oB = (plat.y + plat.h) - p.y;
-      const min = Math.min(oL, oR, oT, oB);
-      if (min === oT && p.vy >= 0) { p.y = plat.y - p.height; p.vy = 0; p.onGround = true; }
-      else if (min === oB && p.vy < 0) { p.y = plat.y + plat.h; p.vy = 0; }
-      else if (min === oL) { p.x = plat.x - p.width; p.vx = 0; }
-      else if (min === oR) { p.x = plat.x + plat.w; p.vx = 0; }
+  p.ground = false;
+  for (const [rx,ry,rw,rh] of platforms) {
+    if (colRect(p.x,p.y,28,28,rx,ry,rw,rh)) {
+      const oL=(p.x+28)-rx,oR=(rx+rw)-p.x,oT=(p.y+28)-ry,oB=(ry+rh)-p.y;
+      const m=Math.min(oL,oR,oT,oB);
+      if(m===oT&&p.vy>=0){p.y=ry-28;p.vy=0;p.ground=true;}
+      else if(m===oB&&p.vy<0){p.y=ry+rh;p.vy=0;}
+      else if(m===oL){p.x=rx-28;p.vx=0;}
+      else if(m===oR){p.x=rx+rw;p.vx=0;}
     }
   }
 
   for (const pk of pickups) {
     if (!pk.alive) continue;
-    const dx = (p.x + p.width / 2) - pk.x, dy = (p.y + p.height / 2) - pk.y;
-    if (dx * dx + dy * dy < 625) {
-      pk.alive = false; pk.respawnTimer = 600;
-      if (pk.type === 'health') { p.health = Math.min(100, p.health + 50); addEffect('heal', pk.x, pk.y, '#2ecc71'); }
-      else {
-        const ammo = { shotgun: 5, rocket: 3, laser: 10 };
-        p.ammo[pk.type] = (p.ammo[pk.type] || 0) + ammo[pk.type];
-        p.weapon = pk.type; addEffect('pickup', pk.x, pk.y, '#ffd700');
-      }
+    if ((p.x+14-pk.x)**2+(p.y+14-pk.y)**2 < 625) {
+      pk.alive=false; pk.timer=300;
+      if (pk.type==='health') p.hp=Math.min(100,p.hp+50);
+      else { const ai={shotgun:1,rocket:2,laser:3}; const amounts=[0,5,3,10]; p.ammo[ai[pk.type]]+=amounts[ai[pk.type]]; p.weapon=pk.type; }
     }
   }
 }
 
-function damagePlayer(target, damage, ownerId, weapon) {
-  target.health -= damage;
-  addEffect('hit', target.x + target.width / 2, target.y + target.height / 2, '#fff');
-  if (target.health <= 0) {
-    target.alive = false; target.respawnTimer = 180; target.deaths++;
-    const killer = players.get(ownerId);
-    if (killer && killer.id !== target.id) { killer.score++; addKill(killer.name, target.name, weapon); }
-    else addKill(target.name, target.name, 'self');
-    addEffect('death', target.x + target.width / 2, target.y + target.height / 2, target.color);
+function hurtPlayer(t,dmg,oid,wpn) {
+  t.hp -= dmg;
+  if (t.hp<=0) {
+    t.alive=false; t.respawn=90; t.deaths++;
+    const k=players.get(oid);
+    if(k&&k.id!==t.id){k.score++;killFeed.push({killer:k.name,victim:t.name,time:150});}
+    else killFeed.push({killer:t.name,victim:t.name,time:150});
   }
 }
 
 function updateBullets() {
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
-    b.x += b.vx; b.y += b.vy; b.life--;
-    if (b.weapon === 'rocket') b.vy += GRAVITY * 0.3;
-    let hit = false;
-    for (const plat of platforms) {
-      if (b.x >= plat.x && b.x <= plat.x + plat.w && b.y >= plat.y && b.y <= plat.y + plat.h) { hit = true; break; }
+  for (let i=bullets.length-1;i>=0;i--) {
+    const b=bullets[i];
+    b.x+=b.vx;b.y+=b.vy;b.life--;
+    if(b.weapon==='rocket')b.vy+=GRAVITY*0.3;
+    let hit=false;
+    for(const[rx,ry,rw,rh]of platforms){if(b.x>=rx&&b.x<=rx+rw&&b.y>=ry&&b.y<=ry+rh){hit=true;break;}}
+    if(!hit)for(const[id,p]of players){
+      if(id!==b.owner&&p.alive&&b.x>=p.x&&b.x<=p.x+28&&b.y>=p.y&&b.y<=p.y+28){hurtPlayer(p,b.dmg,b.owner,b.weapon);hit=true;break;}
     }
-    if (!hit) {
-      for (const [id, p] of players) {
-        if (id !== b.owner && p.alive && b.x >= p.x && b.x <= p.x + p.width && b.y >= p.y && b.y <= p.y + p.height) {
-          damagePlayer(p, b.damage, b.owner, b.weapon); hit = true; break;
-        }
-      }
-    }
-    if (b.life <= 0 || hit) {
-      if (b.explosive) {
-        addEffect('explosion', b.x, b.y, '#f39c12');
-        for (const [, p] of players) {
-          if (!p.alive) continue;
-          const dx = (p.x + p.width / 2) - b.x, dy = (p.y + p.height / 2) - b.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < b.radius) {
-            const falloff = 1 - (dist / b.radius);
-            damagePlayer(p, Math.round(b.damage * falloff * 0.6), b.owner, b.weapon);
-            p.vx += (dx / (dist || 1)) * falloff * 8;
-            p.vy += (dy / (dist || 1)) * falloff * 8 - 3;
-          }
-        }
-      }
-      bullets.splice(i, 1);
+    if(b.life<=0||hit){
+      if(b.explode)for(const[,p]of players){if(!p.alive)continue;const dx=(p.x+14)-b.x,dy=(p.y+14)-b.y,d=Math.sqrt(dx*dx+dy*dy);
+        if(d<b.radius){const f=1-(d/b.radius);hurtPlayer(p,Math.round(b.dmg*f*0.6),b.owner,b.weapon);p.vx+=(dx/(d||1))*f*10;p.vy+=(dy/(d||1))*f*10-4;}}
+      bullets.splice(i,1);
     }
   }
 }
 
-function updatePickups() {
-  for (const pk of pickups) { if (!pk.alive) { pk.respawnTimer--; if (pk.respawnTimer <= 0) pk.alive = true; } }
-}
-
-function updateEffects() {
-  for (let i = effects.length - 1; i >= 0; i--) { effects[i].life--; if (effects[i].life <= 0) effects.splice(i, 1); }
-  for (let i = killFeed.length - 1; i >= 0; i--) { killFeed[i].time--; if (killFeed[i].time <= 0) killFeed.splice(i, 1); }
-}
-
-// Physics loop - 60fps
+// Single combined loop at 30fps
 setInterval(() => {
-  for (const [, p] of players) updatePlayer(p);
+  for (const [,p] of players) updatePlayer(p);
   updateBullets();
-  updatePickups();
-  updateEffects();
-}, 1000 / TICK_RATE);
+  for (const pk of pickups) { if(!pk.alive){pk.timer--;if(pk.timer<=0)pk.alive=true;} }
+  for (let i=killFeed.length-1;i>=0;i--){killFeed[i].time--;if(killFeed[i].time<=0)killFeed.splice(i,1);}
 
-// Network broadcast - 20fps (separate from physics)
-setInterval(() => {
   if (wsClients.size === 0) return;
-
-  const state = {
-    t: 's',
-    p: Array.from(players.values()).map(p => ({
-      i: p.id, x: p.x|0, y: p.y|0, vx: +(p.vx.toFixed(1)), vy: +(p.vy.toFixed(1)),
-      h: p.health, s: p.score, d: p.deaths, n: p.name,
-      c: p.color, a: p.alive, w: p.weapon,
-      am: p.ammo, hk: p.hook ? { x: p.hook.x|0, y: p.hook.y|0 } : null,
-      an: +(Math.atan2(p.input.mouseY - (p.y + p.height / 2), p.input.mouseX - (p.x + p.width / 2)).toFixed(2)),
-      g: p.onGround,
-    })),
-    b: bullets.map(b => ({ i: b.id, x: b.x|0, y: b.y|0, c: b.color, s: b.size, w: b.weapon })),
-    pk: pickups.filter(p => p.alive).map(p => ({ x: p.x, y: p.y, t: p.type })),
-    e: effects.filter(e => e.life === (e.type === 'explosion' ? 20 : 10)),
-    k: killFeed.slice(0, 5),
-  };
-
-  const msg = JSON.stringify(state);
-  for (const [, ws] of wsClients) {
-    if (ws.readyState === 1) ws.send(msg);
-  }
-}, 1000 / NET_RATE);
+  const data = writeBinaryState();
+  for (const [,ws] of wsClients) { if(ws.readyState===1) ws.send(data); }
+}, 1000/TICK_RATE);
 
 const wsClients = new Map();
-let nextPlayerId = 1;
+let nextId = 1;
 
 wss.on('connection', (ws) => {
-  const playerId = nextPlayerId++;
-  const player = createPlayer(playerId);
-  players.set(playerId, player);
-  wsClients.set(playerId, ws);
+  const id = nextId++;
+  const player = mkPlayer(id);
+  players.set(id, player);
+  wsClients.set(id, ws);
 
+  // Init message (JSON, only once)
   ws.send(JSON.stringify({
-    type: 'init', id: playerId, platforms, mapWidth: MAP_WIDTH, mapHeight: MAP_HEIGHT,
-    weapons: WEAPONS, gravity: GRAVITY, moveSpeed: MOVE_SPEED, jumpForce: JUMP_FORCE,
+    type:'init', id, platforms, mapWidth:MAP_W, mapHeight:MAP_H,
+    gravity:GRAVITY, moveSpeed:MOVE_SPEED, jumpForce:JUMP_FORCE,
+    pickupDefs: PICKUP_DEFS.map(([x,y,t])=>({x,y,type:t})),
+    colors: COLORS, tickRate: TICK_RATE,
   }));
-  console.log(`Player ${playerId} connected (${players.size} total)`);
 
   ws.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data);
-      if (msg.type === 'input') player.input = { ...player.input, ...msg };
-      else if (msg.type === 'name') player.name = (msg.name || 'Player').substring(0, 16);
-    } catch (e) {}
+    if (typeof data === 'string' || data instanceof Buffer && data[0] === 0x7B) {
+      try {
+        const msg = JSON.parse(data);
+        if(msg.type==='input') {
+          player.input.l=msg.l?1:0; player.input.r=msg.r?1:0; player.input.j=msg.j?1:0;
+          player.input.mx=msg.mx||0; player.input.my=msg.my||0;
+          player.input.sh=msg.sh?1:0; player.input.hk=msg.hk?1:0;
+          if(msg.sw) player.input.sw=msg.sw;
+        } else if(msg.type==='name') player.name=(msg.name||'Player').substring(0,16);
+      } catch(e){}
+    }
   });
 
-  ws.on('close', () => {
-    players.delete(playerId); wsClients.delete(playerId);
-    console.log(`Player ${playerId} disconnected (${players.size} total)`);
-  });
+  ws.on('close', () => { players.delete(id); wsClients.delete(id); });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`TeeWeb server running on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`TeeWeb on :${PORT}`));

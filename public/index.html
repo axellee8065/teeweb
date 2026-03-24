@@ -3,431 +3,286 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TeeWeb - Multiplayer Shooter</title>
+  <title>TeeWeb</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0a0a1a; overflow: hidden; font-family: 'Segoe UI', sans-serif; cursor: crosshair; }
-    canvas { display: block; }
-    #name-input {
-      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      background: rgba(10,10,30,0.95); padding: 40px 50px; border-radius: 16px;
-      text-align: center; z-index: 30; border: 2px solid #ffd700;
-      box-shadow: 0 0 60px rgba(255,215,0,0.2);
-    }
-    #name-input h1 { color: #ffd700; margin-bottom: 5px; font-size: 42px; letter-spacing: 4px; }
-    #name-input p { color: #888; margin-bottom: 20px; font-size: 14px; }
-    #name-input input {
-      background: #1a1a3a; border: 2px solid #444; color: white;
-      padding: 12px 24px; font-size: 18px; border-radius: 8px;
-      text-align: center; outline: none; width: 280px; transition: border 0.3s;
-    }
-    #name-input input:focus { border-color: #ffd700; }
-    #name-input button {
-      display: block; margin: 20px auto 0; background: linear-gradient(135deg, #ffd700, #f39c12);
-      color: #1a1a2e; border: none; padding: 12px 40px; font-size: 18px;
-      font-weight: bold; border-radius: 8px; cursor: pointer; letter-spacing: 1px;
-    }
-    #name-input button:hover { transform: scale(1.05); }
-    #name-input .controls-hint { margin-top: 20px; color: #666; font-size: 12px; line-height: 1.8; }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#0a0a1a;overflow:hidden;font-family:'Segoe UI',sans-serif;cursor:crosshair}
+    canvas{display:block}
+    #ui{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(10,10,30,.95);padding:40px 50px;border-radius:16px;text-align:center;z-index:30;border:2px solid #ffd700;box-shadow:0 0 60px rgba(255,215,0,.2)}
+    #ui h1{color:#ffd700;margin-bottom:5px;font-size:42px;letter-spacing:4px}
+    #ui p{color:#888;margin-bottom:20px;font-size:14px}
+    #ui input{background:#1a1a3a;border:2px solid #444;color:#fff;padding:12px 24px;font-size:18px;border-radius:8px;text-align:center;outline:none;width:280px}
+    #ui input:focus{border-color:#ffd700}
+    #ui button{display:block;margin:20px auto 0;background:linear-gradient(135deg,#ffd700,#f39c12);color:#1a1a2e;border:none;padding:12px 40px;font-size:18px;font-weight:bold;border-radius:8px;cursor:pointer}
+    #ui .h{margin-top:20px;color:#666;font-size:12px;line-height:1.8}
   </style>
 </head>
 <body>
-  <div id="name-input">
-    <h1>TEEWEB</h1>
-    <p>Multiplayer Shooter</p>
-    <input type="text" id="player-name" placeholder="닉네임 입력" maxlength="16" autofocus>
-    <button onclick="startGame()">PLAY</button>
-    <div class="controls-hint">
-      WASD 이동 | SPACE 점프 | 좌클릭 사격 | 우클릭 훅<br>
-      1 피스톨 | 2 샷건 | 3 로켓 | 4 레이저
-    </div>
+  <div id="ui">
+    <h1>TEEWEB</h1><p>Multiplayer Shooter</p>
+    <input type="text" id="pn" placeholder="닉네임 입력" maxlength="16" autofocus>
+    <button onclick="go()">PLAY</button>
+    <div class="h">WASD 이동 | SPACE 점프 | 좌클릭 사격 | 우클릭 훅<br>1234 무기 전환</div>
   </div>
-  <canvas id="game"></canvas>
+  <canvas id="c"></canvas>
+<script>
+const C=document.getElementById('c'),X=C.getContext('2d');
+let myId,platforms=[],MW=1600,MH=900,cam={x:0,y:0};
+let GR=0.9,MS=5.5,JF=-14,TR=30;
+let COLORS=[],pickupDefs=[];
+const keys={};
+let mx=0,my=0,mdn=0,rdn=0,sw=null;
 
-  <script>
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+// State
+let serverPlayers=[],serverBullets=[],pickupMask=0,kfeed=[];
+let prevPlayers=[],interpT=0,interpD=33;
+let local=null; // client prediction
 
-let myId = null, platforms = [], mapWidth = 1600, mapHeight = 900;
-let camera = { x: 0, y: 0 };
-let GRAVITY = 0.45, MOVE_SPEED = 5.5, JUMP_FORCE = -11.5;
-const keys = {};
-let mouseX = 0, mouseY = 0, mouseDown = false, rightMouseDown = false;
-let switchWeapon = null;
+function resize(){C.width=innerWidth;C.height=innerHeight}
+addEventListener('resize',resize);resize();
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code[0]==='D'&&e.code[5]){sw=['pistol','shotgun','rocket','laser'][(e.code[5]|0)-1]}});
+addEventListener('keyup',e=>{keys[e.code]=0});
+C.addEventListener('mousemove',e=>{mx=e.clientX;my=e.clientY});
+C.addEventListener('mousedown',e=>{if(!e.button)mdn=1;if(e.button===2)rdn=1});
+C.addEventListener('mouseup',e=>{if(!e.button)mdn=0;if(e.button===2)rdn=0});
+C.addEventListener('contextmenu',e=>e.preventDefault());
 
-// Interpolation buffers
-let prevState = null, currState = null, stateTime = 0, stateDelta = 50;
-const particles = [];
+const WPN=['pistol','shotgun','rocket','laser'];
+const WCOL={pistol:'#aaa',shotgun:'#c97',rocket:'#e74c3c',laser:'#3498db'};
+const PCOL={health:'#2ecc71',shotgun:'#c97',rocket:'#e74c3c',laser:'#3498db'};
+const PICO={health:'+',shotgun:'S',rocket:'R',laser:'L'};
 
-// Local prediction for own player
-let localPlayer = null;
-
-function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
-window.addEventListener('resize', resize); resize();
-
-window.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (['Digit1','Digit2','Digit3','Digit4'].includes(e.code)) {
-    switchWeapon = { Digit1: 'pistol', Digit2: 'shotgun', Digit3: 'rocket', Digit4: 'laser' }[e.code];
-  }
-});
-window.addEventListener('keyup', e => { keys[e.code] = false; });
-canvas.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
-canvas.addEventListener('mousedown', e => { if(e.button===0) mouseDown=true; if(e.button===2) rightMouseDown=true; });
-canvas.addEventListener('mouseup', e => { if(e.button===0) mouseDown=false; if(e.button===2) rightMouseDown=false; });
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-
-function startGame() {
-  const name = document.getElementById('player-name').value.trim() || 'Player';
-  document.getElementById('name-input').style.display = 'none';
-  connect(name);
+let ws;
+function go(){
+  const n=document.getElementById('pn').value.trim()||'Player';
+  document.getElementById('ui').style.display='none';
+  connect(n);
 }
-document.getElementById('player-name').addEventListener('keydown', e => { if(e.key==='Enter') startGame(); });
+document.getElementById('pn').addEventListener('keydown',e=>{if(e.key==='Enter')go()});
 
-function connect(name) {
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(`${protocol}//${location.host}`);
-
-  ws.onopen = () => { ws.send(JSON.stringify({ type: 'name', name })); };
-
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'init') {
-      myId = msg.id; platforms = msg.platforms;
-      mapWidth = msg.mapWidth; mapHeight = msg.mapHeight;
-      GRAVITY = msg.gravity || 0.45;
-      MOVE_SPEED = msg.moveSpeed || 5.5;
-      JUMP_FORCE = msg.jumpForce || -11.5;
-    } else if (msg.t === 's') {
-      // Decode compressed state
-      const decoded = {
-        players: msg.p.map(p => ({
-          id: p.i, x: p.x, y: p.y, vx: p.vx, vy: p.vy,
-          health: p.h, score: p.s, deaths: p.d, name: p.n,
-          color: p.c, alive: p.a, weapon: p.w,
-          ammo: p.am, hook: p.hk, angle: p.an, onGround: p.g,
-        })),
-        bullets: msg.b.map(b => ({ id: b.i, x: b.x, y: b.y, color: b.c, size: b.s, weapon: b.w })),
-        pickups: (msg.pk || []).map(p => ({ x: p.x, y: p.y, type: p.t })),
-        effects: msg.e || [],
-        killFeed: msg.k || [],
-      };
-
-      // Spawn particles for new effects
-      for (const ef of decoded.effects) spawnParticles(ef);
-
-      // Update interpolation buffers
-      prevState = currState;
-      currState = decoded;
-      stateTime = performance.now();
-      if (prevState) stateDelta = Math.max(30, Math.min(100, stateTime - (stateTime - stateDelta)));
-
-      // Sync local prediction with server
-      const serverMe = decoded.players.find(p => p.id === myId);
-      if (serverMe && localPlayer) {
-        const dx = serverMe.x - localPlayer.x, dy = serverMe.y - localPlayer.y;
-        if (dx * dx + dy * dy > 2500) { // snap if too far (50px)
-          localPlayer.x = serverMe.x; localPlayer.y = serverMe.y;
-        } else {
-          localPlayer.x += dx * 0.3; localPlayer.y += dy * 0.3;
-        }
-        localPlayer.vx = serverMe.vx; localPlayer.vy = serverMe.vy;
-        localPlayer.onGround = serverMe.onGround;
-        localPlayer.health = serverMe.health; localPlayer.alive = serverMe.alive;
-        localPlayer.weapon = serverMe.weapon; localPlayer.ammo = serverMe.ammo;
-        localPlayer.score = serverMe.score; localPlayer.deaths = serverMe.deaths;
-        localPlayer.hook = serverMe.hook;
-      } else if (serverMe) {
-        localPlayer = { ...serverMe };
+function connect(name){
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(`${proto}//${location.host}`);
+  ws.binaryType='arraybuffer';
+  ws.onopen=()=>{ws.send(JSON.stringify({type:'name',name}))};
+  ws.onmessage=e=>{
+    if(typeof e.data==='string'){
+      const m=JSON.parse(e.data);
+      if(m.type==='init'){
+        myId=m.id;platforms=m.platforms;MW=m.mapWidth;MH=m.mapHeight;
+        GR=m.gravity;MS=m.moveSpeed;JF=m.jumpForce;TR=m.tickRate;
+        COLORS=m.colors;pickupDefs=m.pickupDefs;
+        interpD=1000/TR;
       }
+    } else {
+      parseBinary(new DataView(e.data));
     }
   };
-
-  ws.onclose = () => { setTimeout(() => connect(name), 2000); };
-
-  // Send input at 30fps (not 60)
-  setInterval(() => {
-    if (ws.readyState !== 1) return;
-    ws.send(JSON.stringify({
-      type: 'input', left: !!(keys['KeyA']||keys['ArrowLeft']), right: !!(keys['KeyD']||keys['ArrowRight']),
-      jump: !!(keys['KeyW']||keys['ArrowUp']||keys['Space']),
-      mouseX: (mouseX + camera.x)|0, mouseY: (mouseY + camera.y)|0,
-      shoot: mouseDown, hook: rightMouseDown, switchWeapon,
-    }));
-    switchWeapon = null;
-  }, 1000 / 30);
+  ws.onclose=()=>{setTimeout(()=>connect(name),2000)};
+  // Input at 20fps (minimal)
+  setInterval(()=>{
+    if(!ws||ws.readyState!==1)return;
+    ws.send(JSON.stringify({type:'input',l:keys.KeyA||keys.ArrowLeft?1:0,r:keys.KeyD||keys.ArrowRight?1:0,
+      j:keys.KeyW||keys.ArrowUp||keys.Space?1:0,mx:(mx+cam.x)|0,my:(my+cam.y)|0,sh:mdn,hk:rdn,sw}));
+    sw=null;
+  },50);
 }
 
-// Client-side prediction for own player
-function predictLocal() {
-  if (!localPlayer || !localPlayer.alive) return;
-  const p = localPlayer;
+function parseBinary(dv){
+  let o=0;
+  if(dv.getUint8(o++)!==1)return;
+  const pc=dv.getUint8(o++);
+  const bc=dv.getUint16(o,true);o+=2;
 
-  if (keys['KeyA'] || keys['ArrowLeft']) p.vx = -MOVE_SPEED;
-  else if (keys['KeyD'] || keys['ArrowRight']) p.vx = MOVE_SPEED;
-  else p.vx *= 0.8;
+  prevPlayers=serverPlayers;
+  const np=[];
+  for(let i=0;i<pc;i++){
+    const id=dv.getUint8(o++);
+    const x=dv.getInt16(o,true);o+=2;
+    const y=dv.getInt16(o,true);o+=2;
+    const vx=dv.getInt16(o,true)/10;o+=2;
+    const vy=dv.getInt16(o,true)/10;o+=2;
+    const hp=dv.getUint8(o++);
+    const score=dv.getUint8(o++);
+    const deaths=dv.getUint8(o++);
+    const wi=dv.getUint8(o++);
+    const flags=dv.getUint8(o++);
+    const alive=!!(flags&1),ground=!!(flags&2);
+    const angle=dv.getInt16(o,true)/1000;o+=2;
+    const ammo=[dv.getUint8(o++),dv.getUint8(o++),dv.getUint8(o++),dv.getUint8(o++)];
+    const hasHook=dv.getUint8(o++);
+    let hook=null;
+    if(hasHook){hook={x:dv.getInt16(o,true),y:dv.getInt16(o+2,true)};o+=4;}
+    const ci=dv.getUint8(o++);
+    const nl=dv.getUint8(o++);
+    const nameBytes=new Uint8Array(dv.buffer,o,nl);o+=nl;
+    const name=new TextDecoder().decode(nameBytes);
 
-  if ((keys['KeyW'] || keys['ArrowUp'] || keys['Space']) && p.onGround) {
-    p.vy = JUMP_FORCE; p.onGround = false;
+    np.push({id,x,y,vx,vy,hp,score,deaths,weapon:WPN[wi],alive,ground,angle,ammo,hook,color:COLORS[ci]||'#fff',name});
+  }
+  serverPlayers=np;
+
+  const nb=[];
+  for(let i=0;i<bc;i++){
+    const bx=dv.getInt16(o,true);o+=2;
+    const by=dv.getInt16(o,true);o+=2;
+    const bw=dv.getUint8(o++);
+    const bci=dv.getUint8(o++);
+    nb.push({x:bx,y:by,weapon:WPN[bw],color:COLORS[bci]||'#fff'});
+  }
+  serverBullets=nb;
+
+  pickupMask=dv.getUint16(o,true);o+=2;
+
+  const kc=dv.getUint8(o++);
+  kfeed=[];
+  for(let i=0;i<kc;i++){
+    const kl=dv.getUint8(o++);
+    const ks=new TextDecoder().decode(new Uint8Array(dv.buffer,o,kl));o+=kl;
+    const parts=ks.split('\0');
+    kfeed.push({killer:parts[0],victim:parts[1]||parts[0]});
   }
 
-  p.vy += GRAVITY;
-  p.x += p.vx; p.y += p.vy;
+  interpT=performance.now();
 
-  p.onGround = false;
-  for (const plat of platforms) {
-    if (p.x < plat.x + plat.w && p.x + 28 > plat.x && p.y < plat.y + plat.h && p.y + 28 > plat.y) {
-      const oT = (p.y + 28) - plat.y, oB = (plat.y + plat.h) - p.y;
-      const oL = (p.x + 28) - plat.x, oR = (plat.x + plat.w) - p.x;
-      const min = Math.min(oL, oR, oT, oB);
-      if (min === oT && p.vy >= 0) { p.y = plat.y - 28; p.vy = 0; p.onGround = true; }
-      else if (min === oB && p.vy < 0) { p.y = plat.y + plat.h; p.vy = 0; }
-      else if (min === oL) { p.x = plat.x - 28; p.vx = 0; }
-      else if (min === oR) { p.x = plat.x + plat.w; p.vx = 0; }
+  // Sync local prediction
+  const sme=serverPlayers.find(p=>p.id===myId);
+  if(sme&&local){
+    const dx=sme.x-local.x,dy=sme.y-local.y;
+    if(dx*dx+dy*dy>2500){local.x=sme.x;local.y=sme.y;}
+    else{local.x+=dx*0.3;local.y+=dy*0.3;}
+    local.vy=sme.vy;local.ground=sme.ground;
+    local.hp=sme.hp;local.alive=sme.alive;local.weapon=sme.weapon;
+    local.ammo=sme.ammo;local.score=sme.score;local.deaths=sme.deaths;local.hook=sme.hook;
+  }else if(sme){local={...sme};}
+}
+
+function predict(){
+  if(!local||!local.alive)return;
+  const p=local;
+  if(keys.KeyA||keys.ArrowLeft)p.vx=-MS;
+  else if(keys.KeyD||keys.ArrowRight)p.vx=MS;
+  else p.vx*=0.75;
+  if((keys.KeyW||keys.ArrowUp||keys.Space)&&p.ground){p.vy=JF;p.ground=false;}
+  p.vy+=GR;p.x+=p.vx;p.y+=p.vy;
+  p.ground=false;
+  for(const[rx,ry,rw,rh]of platforms){
+    if(p.x<rx+rw&&p.x+28>rx&&p.y<ry+rh&&p.y+28>ry){
+      const oL=p.x+28-rx,oR=rx+rw-p.x,oT=p.y+28-ry,oB=ry+rh-p.y;
+      const m=Math.min(oL,oR,oT,oB);
+      if(m===oT&&p.vy>=0){p.y=ry-28;p.vy=0;p.ground=true;}
+      else if(m===oB&&p.vy<0){p.y=ry+rh;p.vy=0;}
+      else if(m===oL){p.x=rx-28;p.vx=0;}
+      else if(m===oR){p.x=rx+rw;p.vx=0;}
     }
   }
 }
 
-// Interpolate other players between server snapshots
-function interpolatePlayer(playerId) {
-  if (!prevState || !currState) return currState?.players?.find(p => p.id === playerId);
-  const prev = prevState.players.find(p => p.id === playerId);
-  const curr = currState.players.find(p => p.id === playerId);
-  if (!prev || !curr) return curr || prev;
-
-  const elapsed = performance.now() - stateTime;
-  const t = Math.min(1, elapsed / stateDelta);
-
-  return {
-    ...curr,
-    x: prev.x + (curr.x - prev.x) * t,
-    y: prev.y + (curr.y - prev.y) * t,
-  };
+function lerp(a,b,t){return a+(b-a)*t;}
+function getInterp(id){
+  const prev=prevPlayers.find(p=>p.id===id);
+  const curr=serverPlayers.find(p=>p.id===id);
+  if(!prev||!curr)return curr||prev;
+  const t=Math.min(1,(performance.now()-interpT)/interpD);
+  return{...curr,x:lerp(prev.x,curr.x,t),y:lerp(prev.y,curr.y,t)};
 }
 
-function spawnParticles(ef) {
-  const count = ef.type === 'explosion' ? 25 : ef.type === 'death' ? 15 : 6;
-  for (let i = 0; i < count; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 1 + Math.random() * (ef.type === 'explosion' ? 5 : 3);
-    particles.push({
-      x: ef.x, y: ef.y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - (ef.type === 'death' ? 2 : 0),
-      life: 15 + Math.random() * 15, maxLife: 30,
-      color: ef.color, size: ef.type === 'explosion' ? 3 + Math.random() * 3 : 2 + Math.random() * 2,
-      gravity: ef.type === 'death' ? 0.15 : 0.05,
-    });
-  }
+function li(h,a){const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);return`rgb(${Math.min(255,r+a)},${Math.min(255,g+a)},${Math.min(255,b+a)})`;}
+function da(h,a){const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);return`rgb(${Math.max(0,r-a)},${Math.max(0,g-a)},${Math.max(0,b-a)})`;}
+function rr(x,y,w,h,r){X.beginPath();X.moveTo(x+r,y);X.lineTo(x+w-r,y);X.quadraticCurveTo(x+w,y,x+w,y+r);X.lineTo(x+w,y+h-r);X.quadraticCurveTo(x+w,y+h,x+w-r,y+h);X.lineTo(x+r,y+h);X.quadraticCurveTo(x,y+h,x,y+h-r);X.lineTo(x,y+r);X.quadraticCurveTo(x,y,x+r,y);X.closePath();}
+
+function drawTee(p){
+  if(!p.alive)return;
+  const sx=p.x-cam.x,sy=p.y-cam.y;
+  X.save();X.translate(sx+14,sy+14);
+  X.beginPath();X.ellipse(0,14,12,4,0,0,Math.PI*2);X.fillStyle='rgba(0,0,0,.3)';X.fill();
+  const g=X.createRadialGradient(-3,-3,2,0,0,14);
+  g.addColorStop(0,li(p.color,30));g.addColorStop(1,p.color);
+  X.beginPath();X.arc(0,0,14,0,Math.PI*2);X.fillStyle=g;X.fill();
+  X.strokeStyle=da(p.color,30);X.lineWidth=1.5;X.stroke();
+  const ea=p.angle||0,eox=Math.cos(ea)*3,eoy=Math.sin(ea)*3;
+  X.fillStyle='#fff';
+  X.beginPath();X.arc(-4+eox,-3+eoy,4.5,0,Math.PI*2);X.fill();
+  X.beginPath();X.arc(4+eox,-3+eoy,4.5,0,Math.PI*2);X.fill();
+  X.fillStyle='#111';
+  X.beginPath();X.arc(-3+eox*1.4,-3+eoy*1.4,2.2,0,Math.PI*2);X.fill();
+  X.beginPath();X.arc(5+eox*1.4,-3+eoy*1.4,2.2,0,Math.PI*2);X.fill();
+  X.rotate(ea);X.fillStyle='#444';X.fillRect(8,-3,18,6);
+  X.fillStyle=WCOL[p.weapon]||'#888';X.fillRect(10,-2,14,4);
+  X.restore();
+  if(p.hook){X.save();X.setLineDash([6,4]);X.beginPath();X.moveTo(sx+14,sy+14);X.lineTo(p.hook.x-cam.x,p.hook.y-cam.y);X.strokeStyle='#ccc';X.lineWidth=2;X.stroke();X.setLineDash([]);X.beginPath();X.arc(p.hook.x-cam.x,p.hook.y-cam.y,5,0,Math.PI*2);X.fillStyle='#fff';X.fill();X.restore();}
+  X.font='bold 12px sans-serif';X.textAlign='center';X.fillStyle='#fff';X.fillText(p.name,sx+14,sy-14);
+  if(p.hp<100){X.fillStyle='rgba(0,0,0,.6)';rr(sx-4,sy-8,36,5,2);X.fill();X.fillStyle=p.hp>50?'#2ecc71':p.hp>25?'#f39c12':'#e74c3c';rr(sx-4,sy-8,36*(p.hp/100),5,2);X.fill();}
 }
 
-function updateParticles() {
-  for (let i = particles.length - 1; i >= 0; i--) {
-    const p = particles[i];
-    p.x += p.vx; p.y += p.vy; p.vy += p.gravity; p.vx *= 0.98; p.life--;
-    if (p.life <= 0) particles.splice(i, 1);
-  }
-}
+function render(){
+  predict();
+  if(local){cam.x+=(local.x-C.width/2+14-cam.x)*.12;cam.y+=(local.y-C.height/2+14-cam.y)*.12;}
 
-const WEAPON_COLORS = { pistol: '#aaa', shotgun: '#c97', rocket: '#e74c3c', laser: '#3498db' };
-const PICKUP_COLORS = { health: '#2ecc71', shotgun: '#c97', rocket: '#e74c3c', laser: '#3498db' };
-const PICKUP_ICONS = { health: '+', shotgun: 'S', rocket: 'R', laser: 'L' };
+  X.fillStyle='#0f0f2e';X.fillRect(0,0,C.width,C.height);
 
-function lighten(hex, a) { let r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16); return `rgb(${Math.min(255,r+a)},${Math.min(255,g+a)},${Math.min(255,b+a)})`; }
-function darken(hex, a) { let r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16); return `rgb(${Math.max(0,r-a)},${Math.max(0,g-a)},${Math.max(0,b-a)})`; }
-
-function rr(ctx, x, y, w, h, r) {
-  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
-  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h);
-  ctx.quadraticCurveTo(x,y+h,x,y+h-r); ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
-}
-
-function drawTee(p) {
-  if (!p.alive) return;
-  const sx = p.x - camera.x, sy = p.y - camera.y;
-  ctx.save(); ctx.translate(sx + 14, sy + 14);
-  // Shadow
-  ctx.beginPath(); ctx.ellipse(0, 14, 12, 4, 0, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fill();
-  // Body
-  const grad = ctx.createRadialGradient(-3, -3, 2, 0, 0, 14);
-  grad.addColorStop(0, lighten(p.color, 30)); grad.addColorStop(1, p.color);
-  ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2);
-  ctx.fillStyle = grad; ctx.fill(); ctx.strokeStyle = darken(p.color, 30); ctx.lineWidth = 1.5; ctx.stroke();
-  // Eyes
-  const ea = p.angle || 0, eox = Math.cos(ea) * 3, eoy = Math.sin(ea) * 3;
-  ctx.fillStyle = 'white';
-  ctx.beginPath(); ctx.arc(-4+eox, -3+eoy, 4.5, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(4+eox, -3+eoy, 4.5, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = '#111';
-  ctx.beginPath(); ctx.arc(-3+eox*1.4, -3+eoy*1.4, 2.2, 0, Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.arc(5+eox*1.4, -3+eoy*1.4, 2.2, 0, Math.PI*2); ctx.fill();
-  // Gun
-  ctx.rotate(ea);
-  ctx.fillStyle = '#444'; ctx.fillRect(8, -3, 18, 6);
-  ctx.fillStyle = WEAPON_COLORS[p.weapon] || '#888'; ctx.fillRect(10, -2, 14, 4);
-  if (p.weapon === 'rocket') { ctx.fillStyle = '#c0392b'; ctx.fillRect(22, -4, 8, 8); }
-  else if (p.weapon === 'shotgun') { ctx.fillStyle = '#a87'; ctx.fillRect(8, -4, 20, 8); }
-  ctx.restore();
-  // Hook
-  if (p.hook) {
-    ctx.save(); ctx.setLineDash([6, 4]);
-    ctx.beginPath(); ctx.moveTo(sx+14, sy+14); ctx.lineTo(p.hook.x-camera.x, p.hook.y-camera.y);
-    ctx.strokeStyle = '#ccc'; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
-    ctx.beginPath(); ctx.arc(p.hook.x-camera.x, p.hook.y-camera.y, 5, 0, Math.PI*2);
-    ctx.fillStyle = '#fff'; ctx.fill(); ctx.restore();
-  }
-  // Name
-  ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillText(p.name, sx+15, sy-13);
-  ctx.fillStyle = '#fff'; ctx.fillText(p.name, sx+14, sy-14);
-  // HP bar
-  if (p.health < 100) {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(ctx, sx-4, sy-8, 36, 5, 2); ctx.fill();
-    ctx.fillStyle = p.health > 50 ? '#2ecc71' : p.health > 25 ? '#f39c12' : '#e74c3c';
-    rr(ctx, sx-4, sy-8, 36*(p.health/100), 5, 2); ctx.fill();
-  }
-}
-
-function render() {
-  predictLocal();
-  updateParticles();
-
-  // Camera follows local predicted player
-  if (localPlayer) {
-    camera.x += ((localPlayer.x - canvas.width/2 + 14) - camera.x) * 0.12;
-    camera.y += ((localPlayer.y - canvas.height/2 + 14) - camera.y) * 0.12;
-  }
-
-  // BG
-  const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  bgGrad.addColorStop(0, '#0a0a2e'); bgGrad.addColorStop(1, '#16213e');
-  ctx.fillStyle = bgGrad; ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Stars (parallax)
-  ctx.fillStyle = 'rgba(255,255,255,0.3)';
-  for (let i = 0; i < 50; i++) {
-    ctx.fillRect(((i*137+50)%mapWidth)-camera.x*0.3, ((i*97+30)%mapHeight)-camera.y*0.3, 1.5, 1.5);
-  }
-
-  // Grid
-  ctx.strokeStyle = 'rgba(255,255,255,0.02)'; ctx.lineWidth = 1;
-  for (let x = -(camera.x%50); x < canvas.width; x += 50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke(); }
-  for (let y = -(camera.y%50); y < canvas.height; y += 50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke(); }
-
-  // Platforms
-  for (const p of platforms) {
-    const px = p.x-camera.x, py = p.y-camera.y;
-    if (px > canvas.width+10 || px+p.w < -10 || py > canvas.height+10 || py+p.h < -10) continue; // frustum cull
-    const pGrad = ctx.createLinearGradient(px, py, px, py+p.h);
-    pGrad.addColorStop(0, '#3d3d6b'); pGrad.addColorStop(1, '#2a2a4a');
-    ctx.fillStyle = pGrad; rr(ctx, px, py, p.w, p.h, 3); ctx.fill();
-    ctx.fillStyle = 'rgba(100,100,200,0.3)'; ctx.fillRect(px, py, p.w, 2);
+  // Platforms (culled)
+  for(const[rx,ry,rw,rh]of platforms){
+    const px=rx-cam.x,py=ry-cam.y;
+    if(px>C.width+10||px+rw<-10||py>C.height+10||py+rh<-10)continue;
+    X.fillStyle='#2a2a4a';rr(px,py,rw,rh,3);X.fill();
+    X.fillStyle='rgba(100,100,200,.3)';X.fillRect(px,py,rw,2);
   }
 
   // Pickups
-  const state = currState || { players: [], bullets: [], pickups: [], killFeed: [] };
-  for (const pk of state.pickups) {
-    const px = pk.x-camera.x, py = pk.y-camera.y;
-    const pulse = 0.8 + Math.sin(Date.now()/200) * 0.2;
-    ctx.save(); ctx.translate(px, py); ctx.scale(pulse, pulse);
-    ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2);
-    ctx.fillStyle = PICKUP_COLORS[pk.type]+'44'; ctx.fill();
-    ctx.strokeStyle = PICKUP_COLORS[pk.type]; ctx.lineWidth = 2; ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(PICKUP_ICONS[pk.type], 0, 0); ctx.restore();
-  }
-
-  // Particles
-  for (const p of particles) {
-    ctx.globalAlpha = p.life / p.maxLife;
-    ctx.beginPath(); ctx.arc(p.x-camera.x, p.y-camera.y, p.size*(p.life/p.maxLife), 0, Math.PI*2);
-    ctx.fillStyle = p.color; ctx.fill();
-  }
-  ctx.globalAlpha = 1;
+  pickupDefs.forEach((pk,i)=>{
+    if(!(pickupMask&(1<<i)))return;
+    const px=pk.x-cam.x,py=pk.y-cam.y;
+    const pulse=.8+Math.sin(Date.now()/200)*.2;
+    X.save();X.translate(px,py);X.scale(pulse,pulse);
+    X.beginPath();X.arc(0,0,12,0,Math.PI*2);X.fillStyle=PCOL[pk.type]+'44';X.fill();
+    X.strokeStyle=PCOL[pk.type];X.lineWidth=2;X.stroke();
+    X.fillStyle='#fff';X.font='bold 14px sans-serif';X.textAlign='center';X.textBaseline='middle';
+    X.fillText(PICO[pk.type],0,0);X.restore();
+  });
 
   // Bullets
-  for (const b of state.bullets) {
-    const bx = b.x-camera.x, by = b.y-camera.y;
-    ctx.beginPath(); ctx.arc(bx, by, b.size||4, 0, Math.PI*2);
-    ctx.fillStyle = b.weapon==='laser'?'#00bfff':b.weapon==='rocket'?'#ff6b35':b.color||'#ff0';
-    ctx.fill();
-    ctx.beginPath(); ctx.arc(bx, by, (b.size||4)*2, 0, Math.PI*2);
-    ctx.fillStyle = (b.weapon==='laser'?'rgba(0,191,255,':'rgba(255,255,100,')+'0.12)'; ctx.fill();
+  for(const b of serverBullets){
+    const bx=b.x-cam.x,by=b.y-cam.y;
+    X.beginPath();X.arc(bx,by,b.weapon==='rocket'?5:b.weapon==='laser'?2:3,0,Math.PI*2);
+    X.fillStyle=b.weapon==='laser'?'#00bfff':b.weapon==='rocket'?'#ff6b35':b.color;X.fill();
   }
 
-  // Players - interpolated
-  for (const p of state.players) {
-    if (p.id === myId) {
-      // Draw local predicted player
-      if (localPlayer) drawTee({ ...localPlayer, angle: Math.atan2(mouseY+camera.y-(localPlayer.y+14), mouseX+camera.x-(localPlayer.x+14)), name: p.name, color: p.color, weapon: localPlayer.weapon });
-    } else {
-      const interp = interpolatePlayer(p.id);
-      if (interp) drawTee(interp);
-    }
+  // Players
+  for(const p of serverPlayers){
+    if(p.id===myId){if(local)drawTee({...local,angle:Math.atan2(my+cam.y-local.y-14,mx+cam.x-local.x-14),name:p.name,color:p.color,weapon:local.weapon});}
+    else{const ip=getInterp(p.id);if(ip)drawTee(ip);}
   }
 
   // HUD
-  const me = localPlayer;
-  if (me && !me.alive) {
-    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.font = 'bold 48px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#e74c3c';
-    ctx.fillText('ELIMINATED', canvas.width/2, canvas.height/2-20);
-    ctx.font = '18px sans-serif'; ctx.fillStyle = '#aaa';
-    ctx.fillText('리스폰 대기중...', canvas.width/2, canvas.height/2+20);
-  }
+  const me=local;
+  if(me&&!me.alive){X.fillStyle='rgba(0,0,0,.4)';X.fillRect(0,0,C.width,C.height);X.font='bold 48px sans-serif';X.textAlign='center';X.fillStyle='#e74c3c';X.fillText('ELIMINATED',C.width/2,C.height/2-20);X.font='18px sans-serif';X.fillStyle='#aaa';X.fillText('리스폰 대기중...',C.width/2,C.height/2+20);}
 
-  if (me) {
-    // HP bar
-    const hbw=220, hbh=16, hbx=canvas.width/2-hbw/2, hby=canvas.height-50;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)'; rr(ctx, hbx-2, hby-2, hbw+4, hbh+4, 6); ctx.fill();
-    const hc = me.health>50?'#2ecc71':me.health>25?'#f39c12':'#e74c3c';
-    ctx.fillStyle = hc; rr(ctx, hbx, hby, hbw*(me.health/100), hbh, 4); ctx.fill();
-    ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-    ctx.fillText(`${me.health} HP`, canvas.width/2, hby+12);
-
-    // Weapons
-    ['pistol','shotgun','rocket','laser'].forEach((w, i) => {
-      const x = canvas.width/2-120+i*62, y = canvas.height-85, active = me.weapon===w;
-      const ammo = w==='pistol'?'∞':(me.ammo?.[w]||0);
-      ctx.fillStyle = active?'rgba(255,215,0,0.3)':'rgba(0,0,0,0.4)';
-      rr(ctx, x, y, 56, 28, 4); ctx.fill();
-      if (active) { ctx.strokeStyle='#ffd700'; ctx.lineWidth=1.5; rr(ctx, x, y, 56, 28, 4); ctx.stroke(); }
-      ctx.fillStyle = ammo===0?'#555':(active?'#ffd700':'#aaa');
-      ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(`${i+1} ${w[0].toUpperCase()}`, x+28, y+13);
-      ctx.font = '9px sans-serif'; ctx.fillStyle = ammo===0?'#555':'#888';
-      ctx.fillText(ammo, x+28, y+23);
+  if(me){
+    const hx=C.width/2-110,hy=C.height-50;
+    X.fillStyle='rgba(0,0,0,.6)';rr(hx-2,hy-2,224,20,6);X.fill();
+    X.fillStyle=me.hp>50?'#2ecc71':me.hp>25?'#f39c12':'#e74c3c';rr(hx,hy,220*(me.hp/100),16,4);X.fill();
+    X.font='bold 11px sans-serif';X.textAlign='center';X.fillStyle='#fff';X.fillText(me.hp+' HP',C.width/2,hy+12);
+    WPN.forEach((w,i)=>{
+      const x=C.width/2-120+i*62,y=C.height-85,act=me.weapon===w;
+      const am=i===0?'∞':(me.ammo?.[i]||0);
+      X.fillStyle=act?'rgba(255,215,0,.3)':'rgba(0,0,0,.4)';rr(x,y,56,28,4);X.fill();
+      if(act){X.strokeStyle='#ffd700';X.lineWidth=1.5;rr(x,y,56,28,4);X.stroke();}
+      X.fillStyle=am===0?'#555':act?'#ffd700':'#aaa';X.font='bold 11px sans-serif';X.textAlign='center';
+      X.fillText((i+1)+' '+w[0].toUpperCase(),x+28,y+13);X.font='9px sans-serif';X.fillStyle='#888';X.fillText(am,x+28,y+23);
     });
   }
 
-  // Scoreboard
-  const sorted = [...(state.players||[])].sort((a,b) => b.score-a.score);
-  ctx.fillStyle = 'rgba(0,0,0,0.5)'; rr(ctx, 10, 10, 190, 30+sorted.length*20, 6); ctx.fill();
-  ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'; ctx.fillStyle = '#ffd700';
-  ctx.fillText('SCOREBOARD', 20, 28);
-  sorted.forEach((p, i) => {
-    const y = 48+i*20;
-    if (p.id===myId) { ctx.fillStyle='rgba(255,215,0,0.15)'; ctx.fillRect(15,y-12,180,18); }
-    ctx.fillStyle=p.color; ctx.font='12px sans-serif'; ctx.textAlign='left';
-    ctx.fillText(`${p.alive?'':'💀'}${p.name}`, 20, y);
-    ctx.fillStyle='#aaa'; ctx.textAlign='right'; ctx.fillText(`${p.score}/${p.deaths}`, 190, y); ctx.textAlign='left';
-  });
+  const sorted=[...serverPlayers].sort((a,b)=>b.score-a.score);
+  X.fillStyle='rgba(0,0,0,.5)';rr(10,10,190,30+sorted.length*20,6);X.fill();
+  X.font='bold 13px sans-serif';X.textAlign='left';X.fillStyle='#ffd700';X.fillText('SCOREBOARD',20,28);
+  sorted.forEach((p,i)=>{const y=48+i*20;X.fillStyle=p.color;X.font='12px sans-serif';X.textAlign='left';X.fillText((p.alive?'':'💀')+p.name,20,y);X.fillStyle='#aaa';X.textAlign='right';X.fillText(p.score+'/'+p.deaths,190,y);X.textAlign='left';});
 
-  // Kill feed
-  (state.killFeed||[]).forEach((k, i) => {
-    const y = 20+i*22;
-    ctx.font='12px sans-serif'; ctx.textAlign='right';
-    const text = k.killer===k.victim?`${k.victim} suicided`:`${k.killer} → ${k.victim}`;
-    const tw = ctx.measureText(text).width;
-    ctx.fillStyle='rgba(0,0,0,0.5)'; rr(ctx, canvas.width-tw-30, y-12, tw+20, 18, 4); ctx.fill();
-    ctx.fillStyle='#eee'; ctx.fillText(text, canvas.width-15, y);
-  });
-
-  ctx.font='10px sans-serif'; ctx.textAlign='right'; ctx.fillStyle='rgba(255,255,255,0.3)';
-  ctx.fillText('WASD 이동 | SPACE 점프 | 좌클릭 사격 | 우클릭 훅 | 1234 무기', canvas.width-15, canvas.height-15);
+  kfeed.forEach((k,i)=>{const y=20+i*22;X.font='12px sans-serif';X.textAlign='right';const t=k.killer===k.victim?k.victim+' suicided':k.killer+' → '+k.victim;X.fillStyle='rgba(0,0,0,.5)';const tw=X.measureText(t).width;rr(C.width-tw-30,y-12,tw+20,18,4);X.fill();X.fillStyle='#eee';X.fillText(t,C.width-15,y);});
 
   requestAnimationFrame(render);
 }
 render();
-  </script>
+</script>
 </body>
 </html>
