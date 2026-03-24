@@ -11,10 +11,10 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // Game constants
 const TICK_RATE = 60;
-const GRAVITY = 0.5;
-const MOVE_SPEED = 5;
-const JUMP_FORCE = -10;
-const HOOK_LENGTH = 400;
+const GRAVITY = 0.45;
+const MOVE_SPEED = 5.5;
+const JUMP_FORCE = -11.5;
+const HOOK_LENGTH = 450;
 const MAP_WIDTH = 1600;
 const MAP_HEIGHT = 900;
 
@@ -33,34 +33,73 @@ const effects = [];
 const killFeed = [];
 let nextBulletId = 0;
 
-// Map platforms
+// Map platforms - staircase layout, max 120px vertical gap
 const platforms = [
-  { x: 0, y: MAP_HEIGHT - 20, w: MAP_WIDTH, h: 20 },
-  { x: 0, y: 0, w: MAP_WIDTH, h: 20 },
-  { x: 0, y: 0, w: 20, h: MAP_HEIGHT },
-  { x: MAP_WIDTH - 20, y: 0, w: 20, h: MAP_HEIGHT },
-  { x: 300, y: 700, w: 250, h: 20 },
-  { x: 700, y: 550, w: 200, h: 20 },
-  { x: 1050, y: 700, w: 250, h: 20 },
-  { x: 500, y: 400, w: 300, h: 20 },
-  { x: 150, y: 500, w: 150, h: 20 },
-  { x: 1200, y: 450, w: 200, h: 20 },
-  { x: 650, y: 250, w: 300, h: 20 },
-  { x: 200, y: 300, w: 200, h: 20 },
-  { x: 1100, y: 300, w: 200, h: 20 },
+  // Boundaries
+  { x: 0, y: MAP_HEIGHT - 20, w: MAP_WIDTH, h: 20 },       // floor (y=880)
+  { x: 0, y: 0, w: MAP_WIDTH, h: 20 },                      // ceiling
+  { x: 0, y: 0, w: 20, h: MAP_HEIGHT },                      // left wall
+  { x: MAP_WIDTH - 20, y: 0, w: 20, h: MAP_HEIGHT },         // right wall
+
+  // Level 1 - reachable from floor (y=880, jump ~147px → y=760+)
+  { x: 80, y: 770, w: 200, h: 20 },
+  { x: 450, y: 790, w: 180, h: 20 },
+  { x: 750, y: 770, w: 200, h: 20 },
+  { x: 1050, y: 790, w: 180, h: 20 },
+  { x: 1350, y: 770, w: 180, h: 20 },
+
+  // Level 2
+  { x: 200, y: 660, w: 220, h: 20 },
+  { x: 580, y: 670, w: 160, h: 20 },
+  { x: 900, y: 660, w: 200, h: 20 },
+  { x: 1200, y: 670, w: 200, h: 20 },
+
+  // Level 3
+  { x: 50, y: 560, w: 180, h: 20 },
+  { x: 400, y: 550, w: 250, h: 20 },
+  { x: 750, y: 560, w: 180, h: 20 },
+  { x: 1080, y: 550, w: 220, h: 20 },
+  { x: 1380, y: 560, w: 160, h: 20 },
+
+  // Level 4
+  { x: 180, y: 450, w: 200, h: 20 },
+  { x: 550, y: 440, w: 200, h: 20 },
+  { x: 900, y: 450, w: 250, h: 20 },
+  { x: 1250, y: 440, w: 180, h: 20 },
+
+  // Level 5
+  { x: 50, y: 340, w: 160, h: 20 },
+  { x: 350, y: 330, w: 220, h: 20 },
+  { x: 700, y: 340, w: 300, h: 20 },
+  { x: 1100, y: 330, w: 200, h: 20 },
+  { x: 1400, y: 340, w: 140, h: 20 },
+
+  // Level 6 - top area
+  { x: 150, y: 230, w: 200, h: 20 },
+  { x: 500, y: 220, w: 250, h: 20 },
+  { x: 850, y: 230, w: 200, h: 20 },
+  { x: 1200, y: 220, w: 220, h: 20 },
+
+  // Top platforms
+  { x: 350, y: 120, w: 200, h: 20 },
+  { x: 700, y: 110, w: 250, h: 20 },
+  { x: 1050, y: 120, w: 200, h: 20 },
 ];
 
-// Pickup spawn points
+// Pickup spawn points (on platforms)
 const PICKUP_SPAWNS = [
-  { x: 420, y: 670, type: 'shotgun' },
-  { x: 790, y: 520, type: 'rocket' },
-  { x: 1170, y: 670, type: 'laser' },
-  { x: 640, y: 370, type: 'health' },
-  { x: 780, y: 220, type: 'shotgun' },
-  { x: 290, y: 270, type: 'health' },
-  { x: 1190, y: 270, type: 'rocket' },
-  { x: 220, y: 470, type: 'laser' },
-  { x: 1290, y: 420, type: 'health' },
+  { x: 300, y: 630, type: 'shotgun' },
+  { x: 980, y: 630, type: 'laser' },
+  { x: 500, y: 520, type: 'health' },
+  { x: 1180, y: 520, type: 'rocket' },
+  { x: 280, y: 420, type: 'laser' },
+  { x: 650, y: 410, type: 'health' },
+  { x: 1000, y: 420, type: 'shotgun' },
+  { x: 450, y: 300, type: 'rocket' },
+  { x: 830, y: 310, type: 'health' },
+  { x: 1190, y: 300, type: 'shotgun' },
+  { x: 600, y: 190, type: 'rocket' },
+  { x: 810, y: 80, type: 'health' },
 ];
 
 function initPickups() {
@@ -75,7 +114,7 @@ const COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c'
 
 function createPlayer(id) {
   return {
-    id, x: 200 + Math.random() * (MAP_WIDTH - 400), y: 200,
+    id, x: 200 + Math.random() * (MAP_WIDTH - 400), y: 400,
     vx: 0, vy: 0, width: 28, height: 28, onGround: false,
     input: { left: false, right: false, jump: false, mouseX: 0, mouseY: 0, shoot: false, hook: false, switchWeapon: null },
     health: 100, score: 0, deaths: 0, name: 'Player',
@@ -137,7 +176,7 @@ function updatePlayer(p) {
     p.respawnTimer--;
     if (p.respawnTimer <= 0) {
       p.alive = true; p.health = 100;
-      p.x = 200 + Math.random() * (MAP_WIDTH - 400); p.y = 200;
+      p.x = 200 + Math.random() * (MAP_WIDTH - 400); p.y = 400;
       p.vx = 0; p.vy = 0; p.hook = null;
       p.weapon = 'pistol';
       p.ammo = { pistol: Infinity, shotgun: 0, rocket: 0, laser: 0 };
