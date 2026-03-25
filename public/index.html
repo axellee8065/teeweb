@@ -37,6 +37,7 @@ let mx=0,my=0,mdn=0,rdn=0,sw=null;
 // Uses display positions that smoothly blend between server snapshots
 let displayPlayers=new Map(); // id -> {x,y,tx,ty,...} (current display + target)
 let serverBullets=[];
+let lastBulletUpdate=0;
 let pickupMask=0;
 let kfeed=[];
 
@@ -153,9 +154,14 @@ function parseBinary(dv){
 
   const nb=[];
   for(let i=0;i<bc;i++){
-    nb.push({x:dv.getInt16(o,true),y:dv.getInt16(o+2,true),weapon:WPN[dv.getUint8(o+4)],color:COLORS[dv.getUint8(o+5)]||'#fff'});o+=6;
+    const bx=dv.getInt16(o,true),by=dv.getInt16(o+2,true);
+    const bvx=dv.getInt16(o+4,true)/10,bvy=dv.getInt16(o+6,true)/10;
+    const bw=WPN[dv.getUint8(o+8)],bc2=COLORS[dv.getUint8(o+9)]||'#fff';
+    nb.push({x:bx,y:by,vx:bvx,vy:bvy,weapon:bw,color:bc2,dx:bx,dy:by});
+    o+=10;
   }
   serverBullets=nb;
+  lastBulletUpdate=performance.now();
 
   pickupMask=dv.getUint16(o,true);o+=2;
 
@@ -293,10 +299,19 @@ function render(now){
     X.fillText(PICO[pk.type],0,0);X.restore();
   });
 
-  // Bullets
+  // Bullets (client-side extrapolation from last server position + velocity)
+  const bulletElapsed=(now-lastBulletUpdate)/1000; // seconds since last update
   for(const b of serverBullets){
-    X.beginPath();X.arc(b.x-cam.x,b.y-cam.y,b.weapon==='rocket'?5:b.weapon==='laser'?2:3,0,Math.PI*2);
+    // Extrapolate position based on velocity
+    const bx=b.x+b.vx*bulletElapsed*30-cam.x; // *30 because vx is per-tick at 30fps
+    const by=b.y+b.vy*bulletElapsed*30-cam.y;
+    const sz=b.weapon==='rocket'?5:b.weapon==='laser'?2:3;
+    X.beginPath();X.arc(bx,by,sz,0,Math.PI*2);
     X.fillStyle=b.weapon==='laser'?'#00bfff':b.weapon==='rocket'?'#ff6b35':b.color;X.fill();
+    // Small trail
+    X.globalAlpha=0.3;
+    X.beginPath();X.arc(bx-b.vx*0.3,by-b.vy*0.3,sz*0.7,0,Math.PI*2);X.fill();
+    X.globalAlpha=1;
   }
 
   // Other players (smoothed)

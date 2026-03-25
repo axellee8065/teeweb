@@ -133,10 +133,12 @@ function writeBinaryState() {
     nameBytes.copy(buf, off); off += nameBytes.length;
   }
 
-  // Bullets: x(2) + y(2) + weapon(1) + colorIdx(1)
+  // Bullets: x(2) + y(2) + vx(2) + vy(2) + weapon(1) + colorIdx(1)
   for (const b of bullets) {
     buf.writeInt16LE(b.x|0, off); off += 2;
     buf.writeInt16LE(b.y|0, off); off += 2;
+    buf.writeInt16LE((b.vx*10)|0, off); off += 2;
+    buf.writeInt16LE((b.vy*10)|0, off); off += 2;
     buf[off++] = WPN_IDX[b.weapon] || 0;
     buf[off++] = COLORS.indexOf(b.color) & 0xFF;
   }
