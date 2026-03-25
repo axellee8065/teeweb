@@ -13,7 +13,7 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 const TICK_RATE = 30;  // physics + network combined at 30fps (was 60+20 separate)
 const GRAVITY = 0.9;   // adjusted for 30fps (was 0.45 at 60fps)
 const MOVE_SPEED = 5.5;
-const JUMP_FORCE = -14; // adjusted for 30fps
+const JUMP_FORCE = -18; // adjusted for 30fps
 const HOOK_LENGTH = 450;
 const MAP_W = 1600, MAP_H = 900;
 
